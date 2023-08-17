@@ -1,0 +1,22 @@
+[package]
+name = "onna"
+description = "Real-time terminal video player."
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ansi_colours = "1.2.2"
+gstreamer = "0.17" 
+gstreamer-app = "0.17" # appsink 
+glib = "0.14" # gobject traits and error type
+termsize = "0.1.6"
+clap = { version = "4.3.21", features = ["derive"] }
+ctrlc = { version = "3.4.0"}
+
+
+
+[profile.release-lto]
+inherits = "release"
+lto = "fat"
