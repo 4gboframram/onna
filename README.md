@@ -10,9 +10,13 @@
 - Frame dropping when the renderer gets out of sync
 
 ## Previews
+✅ Bad Apple (click to view)
 
-No previews yet because my laptop is being a potato rn.
+[![Bad Apple](https://img.youtube.com/vi/vuBwfK6ZA50/0.jpg)](https://www.youtube.com/watch?v=vuBwfK6ZA50)
 
+✅ `女の子になりたい` (I wanna be a girl) (click to view)
+
+[![Bad Apple](https://img.youtube.com/vi/SsqUDfQHbjE/0.jpg)](https://www.youtube.com/watch?v=SsqUDfQHbjE)
 ## Installation
 
 Installation requires `gstreamer` for your platform.
