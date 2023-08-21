@@ -2,9 +2,12 @@ use clap::Parser;
 use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
+use std::cmp::Ordering;
+use std::error::Error;
 use std::io::Write;
 use std::ops::{Deref, DerefMut};
-use std::sync::mpsc;
+use std::str::from_utf8;
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::{
     io::{stdout, BufWriter},
@@ -19,6 +22,7 @@ use std::{
 // const ASCII_CHARS: &str =
 //     "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. ";
 
+// reversed for light mode
 // const ASCII_CHARS: &str = "$@B%8&W#*oahkbdpqwmZOQCJUYXzcvuxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"`. ";
 const ASCII_CHARS: &str = " .`\",:;Il!i><~+_-?][}{1)(|\\/tfjrxuvczXYUJCQOZmwqpdbkhao*#W&8%B@$";
 
@@ -102,21 +106,56 @@ fn normalize_luminance(pixel: [u8; 4], luminance: u8) -> [u8; 4] {
     let r = (r as u32) << 8;
     let g = (g as u32) << 8;
     let b = (b as u32) << 8;
-    // let x = (x as u32) << 8;
+
     let r = ((r * inv_lum) >> 8).min(u8::MAX as u32) as u8;
     let g = ((g * inv_lum) >> 8).min(u8::MAX as u32) as u8;
     let b = ((b * inv_lum) >> 8).min(u8::MAX as u32) as u8;
-    // let x = ((x * inv_lum) >> 8).min(u8::MAX as u32) as u8;
+
     [r, g, b, ch]
 }
+pub struct Differ<C: Colorize> {
+    data: Vec<(Range<usize>, C, u8)>,
+}
 
+impl<C: Colorize> Differ<C> {
+    pub fn new(width: u32, height: u32) -> Self {
+        Self {
+            data: Vec::with_capacity(width as usize * height as usize),
+        }
+    }
+    pub fn assign_diff(&mut self, curr: &[[u8; 4]], prev: &[[u8; 4]]) {
+        self.data.clear();
+        let diff_iter = BufferDiffIter::new(curr, prev)
+            .map(|(pos, [r, g, b, chr])| (pos, C::from_rgb([r, g, b]), chr));
+
+        self.data.extend(diff_iter);
+
+        // Comparing the both the colors and the character seems to produce much less dropped frames on my machine
+        // than just comparing color, even though it is more likely to produce different colors next to each other.
+        // My hypothesis is that it's because it does less swaps.
+
+        // I've literally tried every single combination of `Ordering`, stableness, and comparing 1 vs 2 elements
+        // and found through benchmarking that this was the fastest of them all.
+        //
+        // `sort_by` usually produced between 1-1.5 orders of magnitude more dropped frames compared to `sort_unstable_by`
+        self.data.sort_unstable_by(|(_, x, c1), (_, y, c2)| {
+            if (x, c1) == (y, c2) {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            }
+        });
+    }
+    pub fn data(&self) -> &[(Range<usize>, C, u8)] {
+        &self.data
+    }
+}
 pub struct Renderer {
     width: u32,
     height: u32,
     term_height: u32,
-    // frame characters
-    // frame_buf: Box<[u8]>,
-    // rgb color
+
+    // [r, g, b, char]
     color_buf: Box<[[u8; 4]]>,
     prev_buf: Box<[[u8; 4]]>,
 }
@@ -124,13 +163,13 @@ pub struct Renderer {
 impl Renderer {
     pub fn new(width: u32, height: u32, term_height: u32) -> Self {
         let num_pixels = width * height;
-        // let frame_buf = vec![0; num_pixels as usize].into_boxed_slice();
         let color_buf = vec![[0u8, 0, 0, 0]; num_pixels as usize].into_boxed_slice();
+
         Self {
             width,
             height,
             term_height,
-            // frame_buf,
+
             prev_buf: color_buf.clone(),
             color_buf,
         }
@@ -148,44 +187,75 @@ impl Renderer {
             self.color_buf[i] = normalize_luminance(pixel, lum);
         }
     }
-    pub fn render_frame<C: Colorize>(&self, output: &mut impl Write) -> std::io::Result<()> {
-        // go to 0, 0
-        write!(output, "\x1b[0;0H")?;
-        let difs = BufferDiffIter::new(&self.color_buf, &self.prev_buf);
+    pub fn render_meow(&self, data: &mut [u8], mut out: impl Write) -> std::io::Result<()> {
+        assert_eq!(data.len() as u32, self.width * self.height * 4);
+        use base64ct::{Base64, Encoding};
+
+        let data = Base64::encode_string(data);
+        let mut iter = data.as_bytes().chunks(4096).peekable();
+        while let Some(chunk) = iter.next() {
+            let m = iter.peek().is_some() as u8;
+            // let s = Base64::encode_string(chunk);
+            let s = from_utf8(chunk).unwrap();
+            write!(
+                out,
+                "\x1b_Ga=T,f=32,s={},v={},C=1,m={},x=1,y=1;{s}\x1b\\",
+                self.width, self.height, m
+            )?;
+        }
+        out.flush()
+    }
+    pub fn create_differ<C: Colorize>(&self) -> Differ<C> {
+        Differ::new(self.width, self.height)
+    }
+    pub fn render_frame<C: Colorize + Clone>(
+        &self,
+        output: &mut impl Write,
+        differ: &mut Differ<C>,
+    ) -> std::io::Result<()> {
         // not implemented yet
         // // if there's a lot changed between frames  (more than ~50% of the total area, in stride count)
         // // then just rerender the entire screen
         // if difs.len() >= ((self.width * (self.height)) as usize >> 1) {
         //     return self.render_full::<C>(output);
         // }
+
+        // profiling suggests that we are almost 100% io-bound, so we are basically free to do any optimization on escape sequences
+        differ.assign_diff(&self.color_buf, &self.prev_buf);
+
         let mut prev_end: usize = 0;
+        let mut prev_color = C::default();
 
-        for (pos, [r, g, b, ch]) in difs {
-            let color = C::from_rgb([r, g, b]);
+        for (pos, color, chr) in differ.data() {
+            // let color = C::from_rgb([r, g, b]);
 
-            // if the previous end is the same as the start, that means the cursor is in the right position
-            // and therefore we do not need to print the escape to skip to the line
-            if pos.start != prev_end {
+            // If the previous end is the same as the start, that means the cursor is in the right position
+            // and therefore we do not need to print the escape to skip to the line,
+            // unless the requred position *is* the origin.
+            // In that case, we almost always need to jump to it.
+            if pos.start != prev_end || prev_end == 0 {
                 let line = pos.start / self.width as usize;
                 let column = pos.start % self.width as usize;
                 // it is almost always less characters to skip directly to the line and column than to use relative motion
                 // maybe i'll optimize that too
                 write!(output, "\x1b[{};{}H", line, column)?;
             }
+            if color != &prev_color {
+                color.write_escape(output)?;
+            }
 
-            color.write_escape(output)?;
             for i in pos.clone() {
                 let col = i % self.width as usize;
                 if col == 0 {
                     output.write(b"\n")?;
-                    // output.write(b"\x1b[1B")?; // next line
-                    // write!(output, "\x1b[{}D", col - 1)?; // go to the column
                     color.write_escape(output)?;
                 }
-                output.write(&[ch])?;
+                output.write(&[*chr])?;
             }
             prev_end = pos.end;
+            prev_color = color.clone();
         }
+
         output.flush()?;
         Ok(())
     }
@@ -202,9 +272,14 @@ pub struct Args {
     /// Use 256 colors instead of truecolor. This may speed up the rendering at the cost of color quality.
     #[arg(short, long, default_value_t = false)]
     ansi256: bool,
-    /// The maximum amount of time to wait until the decoder gets the source capabilities
+    /// The maximum amount of time to wait for the decoder to get the source capabilities
     #[arg(short, long, default_value_t = 5)]
     timeout: u64,
+
+    /// (Experimental and buggy) Use the kitty image protocol.
+    /// This may or may not cause the terminal to freeze upon program exit.
+    #[arg(short, long, default_value_t = false)]
+    kitty: bool,
 }
 
 fn hide_cursor(mut out: impl Write) -> std::io::Result<()> {
@@ -276,7 +351,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (termwidth, termheight) = (termsize.cols, termsize.rows);
 
     let out = BufWriter::with_capacity(
-        (termwidth as usize * termheight as usize) * 12, // have room for slightly above the worst case where we need an escape sequence for each pixel on the screen
+        (termwidth as usize * termheight as usize) * 18, // have room for slightly above the worst case where we need an escape sequence for each pixel on the screen
         stdout().lock(),
     );
     let mut out = HideCursor::new(out);
@@ -287,10 +362,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // resize with half the height because the terminal font is generally ~1:2 aspect ratio
     // use rgbx format because we will use the `x` to store the character printed
     //
+    let (params, format) = if !args.kitty {
+        (
+            format!("width={termwidth},height={termheight},pixel-aspect-ratio=1/2"),
+            "RGBx",
+        )
+    } else {
+        (
+            format!(
+                "pixel-aspect-ratio=1/1,width={},height={}",
+                termwidth * 4,
+                termheight * 4 // arbitrary size. i don't feel like getting the terminal window size currently.
+                               // kitty's protocol kinda sucks tbh
+                               // and apparently frame skipping doesn't work either for some reason
+            ),
+            "RGBA",
+        )
+    };
     let source = gst::parse_launch(&format!(
         "playbin uri=\"{}\" video-sink=\"videoconvert
         ! videoscale 
-        ! appsink name=app_sink caps=video/x-raw,width={termwidth},height={termheight},format=RGBx,pixel-aspect-ratio=1/2
+        ! appsink name=app_sink caps=video/x-raw,{params},format={format}
         ! sink_to_location\"",
         file
     ))?;
@@ -390,11 +482,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // wait for up to 5 seconds until the decoder gets the source capabilities
     source.state(gst::ClockTime::from_seconds(args.timeout)).0?;
+    if !args.kitty {
+        if args.ansi256 {
+            do_run::<XTerm256>(wait, renderer_clone, frame_ref_clone, out)?;
+        } else {
+            do_run::<RGB>(wait, renderer_clone, frame_ref_clone, out)?;
+        }
+    } else {
+        while wait.recv_timeout(Duration::from_secs(3)).is_ok() {
+            let renderer = renderer_clone.lock().unwrap();
+            let mut frame_data = frame_ref_clone.lock().unwrap();
+            if frame_data.is_empty() {
+                continue;
+            }
+            renderer.render_meow(&mut frame_data, out.deref_mut())?;
+        }
+    }
 
     // end the playback 3 seconds after the video ends
-    while wait.recv_timeout(Duration::from_secs(3)).is_ok() {
-        let mut renderer = renderer_clone.lock().unwrap();
 
+    print_dropped_frames(dropped_frames_counter_2, frame_counter_2, stdout());
+    Ok(())
+}
+
+fn do_run<C: Colorize + Clone>(
+    wait: Receiver<()>,
+    renderer: Arc<Mutex<Renderer>>,
+    frame_ref_clone: Arc<Mutex<Vec<u8>>>,
+    mut out: HideCursor<impl Write>,
+) -> Result<(), Box<dyn Error>> {
+    let mut differ = {
+        let renderer = renderer.lock().unwrap();
+        renderer.create_differ()
+    };
+    while wait.recv_timeout(Duration::from_secs(3)).is_ok() {
+        let mut renderer = renderer.lock().unwrap();
         {
             let frame_data = frame_ref_clone.lock().unwrap();
             if frame_data.is_empty() {
@@ -402,12 +524,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             renderer.process_frame(&frame_data);
         }
-        if args.ansi256 {
-            renderer.render_frame::<XTerm256>(out.deref_mut())?;
-        } else {
-            renderer.render_frame::<RGB>(out.deref_mut())?;
-        }
+        renderer.render_frame::<C>(out.deref_mut(), &mut differ)?;
     }
-    print_dropped_frames(dropped_frames_counter_2, frame_counter_2, stdout());
     Ok(())
 }

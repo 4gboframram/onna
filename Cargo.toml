@@ -14,9 +14,15 @@ glib = "0.14" # gobject traits and error type
 termsize = "0.1.6"
 clap = { version = "4.3.21", features = ["derive"] }
 ctrlc = { version = "3.4.0"}
-
+num_cpus = "1.16.0"
+base64ct = { version = "1.6.0", features = ["alloc", "std"] }
 
 
 [profile.release-lto]
 inherits = "release"
 lto = "fat"
+
+[profile.release-lto-debug]
+inherits = "release"
+lto = "fat"
+debug = true
