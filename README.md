@@ -48,7 +48,6 @@ Alternatively, you can run `RUSTFLAGS="-C target-cpu=native"  cargo install --pr
   - A: Soon™️
 - Q: Why do you need so many questions in an FAQ?
   - A: Because people asked me a bunch of questions. Why else?
-- Q: What's
 
 ## Changelog
 
