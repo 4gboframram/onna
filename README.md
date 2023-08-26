@@ -4,20 +4,22 @@
 
 - Support for as many video formats as your `gstreamer` installation supports
 - Supports any terminal that supports ANSI escape sequences for cursor movement and color
-
   - Truecolor and ANSI 256 color
 - Real-time video playing / streaming with audio
 - Frame dropping when the renderer gets out of sync
 
 ## Previews
-
-✅ Bad Apple (click to view)
+✅ `Bad Apple` (click to view)
 
 [![Bad Apple](https://img.youtube.com/vi/vuBwfK6ZA50/0.jpg)](https://www.youtube.com/watch?v=vuBwfK6ZA50)
 
 ✅ `女の子になりたい` (I wanna be a girl) (click to view)
 
-[![Bad Apple](https://img.youtube.com/vi/SsqUDfQHbjE/0.jpg)](https://www.youtube.com/watch?v=SsqUDfQHbjE)
+[![I wanna be a girl](https://img.youtube.com/vi/SsqUDfQHbjE/0.jpg)](https://www.youtube.com/watch?v=SsqUDfQHbjE)
+
+✅ `可愛くてごめん` (Sorry for being too cute) (mafumafu cover) (click to view)
+
+[![Sorry for being too cute (mafumafu cover)](https://img.youtube.com/vi/5XAd4aGv52M/0.jpg)](https://www.youtube.com/watch?v=5XAd4aGv52M)
 
 ## Installation
 
@@ -25,7 +27,7 @@ Installation requires `gstreamer` for your platform.
 
 After you install `gstreamer`, you can compile and install by cloning the repository and running `cargo install --path .`
 
-Alternatively, you can run `RUSTFLAGS="-C target-cpu=native"  cargo install --profile=release-lto --path .` to enable architecture-specific optimizations
+Alternatively, you can run `RUSTFLAGS="-C target-cpu=native" cargo install --profile=release-lto --path .` to enable architecture-specific optimizations
 
 ## FAQ
 
