@@ -16,6 +16,7 @@ clap = { version = "4.3.21", features = ["derive"] }
 ctrlc = { version = "3.4.0"}
 num_cpus = "1.16.0"
 base64ct = { version = "1.6.0", features = ["alloc", "std"] }
+signal-hook = "0.3.17"
 
 
 [profile.release-lto]

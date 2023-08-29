@@ -106,7 +106,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let mut out = HideCursor::new(out);
 
-    write!(out, "\x1b[2J")?; // clear the screen
     gst::init()?;
 
     // Resize with half the height because the terminal font is generally ~1:2 aspect ratio.
@@ -124,7 +123,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &format!(
             "playbin uri=\"{file}\" video-sink=\"videoconvert
         ! videoscale 
-        ! appsink name=app_sink caps=video/x-raw,{params},format={format}
+        ! capsfilter name=caps caps=video/x-raw,{params},format={format}
+        ! appsink name=app_sink
         ! sink_to_location\"",
         ),
         Duration::from_secs(args.timeout),
@@ -165,6 +165,13 @@ where
     let i = interrupt.clone();
     ctrlc::set_handler(move || i.store(true, std::sync::atomic::Ordering::Relaxed))
         .expect("failed to set interrupt handler");
+
+    // Set to true when a terminal resize is detected
+    let terminal_resized = std::sync::Arc::new(AtomicBool::new(false));
+
+    // TODO: This crate only works on unix-like systems. An alternative is needed for windows systems.
+    signal_hook::flag::register(signal_hook::consts::SIGWINCH, terminal_resized.clone())?;
+
     while let Ok(msg) = wait.recv_timeout(Duration::from_secs(3)) {
         if interrupt.load(std::sync::atomic::Ordering::Relaxed) {
             break;
@@ -175,6 +182,8 @@ where
 
                 state = Some(r.create_state());
                 renderer = Some(r);
+
+                write!(out, "\x1b[2J")?; // clear the screen
             }
             ProducerMessage::FrameReady => {
                 let r = renderer.as_mut().expect("renderer should be initialized");
@@ -186,6 +195,14 @@ where
                 }
                 r.render_frame(&mut out, state)?;
             }
+        }
+
+        if terminal_resized.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            // Tell producer to change the size of new video frames
+            // The renderer can't be resized yet, since there may still be unrendered frames that use the previous resolution
+            let termsize = termsize::get().unwrap();
+            let (termwidth, termheight) = (termsize.cols, termsize.rows);
+            producer.resize(termwidth as u32, termheight as u32);
         }
     }
     Ok(())
