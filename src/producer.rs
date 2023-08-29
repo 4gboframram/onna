@@ -106,8 +106,11 @@ impl GstProducer {
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
                     {
                         let mut data = frame_data.lock().map_err(|_| gst::FlowError::Error)?;
-                        // TODO: Optimise, since most frames will be the same size
-                        *data = map.to_vec();
+                        if data.len() == map.len() {
+                            data.copy_from_slice(&map);
+                        } else {
+                            *data = map.to_vec();
+                        }
                     }
 
                     {
