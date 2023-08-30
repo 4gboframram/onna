@@ -72,7 +72,7 @@ impl GstProducer {
 
         let caps_filter = bin.by_name("caps").unwrap();
 
-        let (notify, recv) = sync_channel(1);
+        let (notify, recv) = sync_channel(2);
         source.set_state(gst::State::Playing)?;
         source
             .state(gst::ClockTime::from_seconds(timeout.as_secs()))
