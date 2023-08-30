@@ -228,7 +228,7 @@ fn render_stride<C: Colorize>(
         let column = pos.start % width as usize;
         // it is almost always less characters to skip directly to the line and column than to use relative motion
         // maybe i'll optimize that too
-        write!(output, "\x1b[{};{}H", line, column)?;
+        write!(output, "\x1b[{};{}H", line+1, column+1)?;
     }
     if color != prev_color || i == 0 {
         color.write_escape(&mut output)?;
