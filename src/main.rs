@@ -17,8 +17,10 @@ mod buffer;
 mod color;
 mod producer;
 mod render;
+mod resize_watcher;
 
 use color::{Ansi256, BackgroundAnsi256, BackgroundRgb, Rgb};
+use crate::resize_watcher::ResizeWatcher;
 
 /// Play a video in the terminal from a file path or url.
 #[derive(Parser)]
@@ -166,11 +168,7 @@ where
     ctrlc::set_handler(move || i.store(true, std::sync::atomic::Ordering::Relaxed))
         .expect("failed to set interrupt handler");
 
-    // Set to true when a terminal resize is detected
-    let terminal_resized = std::sync::Arc::new(AtomicBool::new(false));
-
-    // TODO: This crate only works on unix-like systems. An alternative is needed for windows systems.
-    signal_hook::flag::register(signal_hook::consts::SIGWINCH, terminal_resized.clone())?;
+    let mut resize_watcher = resize_watcher::default_watcher()?;
 
     while let Ok(msg) = wait.recv_timeout(Duration::from_secs(3)) {
         if interrupt.load(std::sync::atomic::Ordering::Relaxed) {
@@ -197,7 +195,7 @@ where
             }
         }
 
-        if terminal_resized.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        if resize_watcher.resized() {
             // Tell producer to change the size of new video frames
             // The renderer can't be resized yet, since there may still be unrendered frames that use the previous resolution
             let termsize = termsize::get().unwrap();
