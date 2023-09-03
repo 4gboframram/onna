@@ -43,6 +43,18 @@ pub struct Args {
     /// Use the colors as the background of the pixel instead of the foreground. This is the recommended mode and may become default in the future.
     #[arg(short, long, default_value_t = false)]
     background: bool,
+    /// Do not switch to the alternate buffer, do not clear the last frame on exit.
+    #[arg(short, long, default_value_t = false)]
+    noswitch: bool,
+}
+
+fn enter_alternative_screen(mut out: impl Write) -> std::io::Result<()> {
+    out.write_all(b"\x1b[?47h")?;  // Enable alt-buffer
+    Ok(())
+}
+fn exit_alternative_screen(mut out: impl Write) -> std::io::Result<()> {
+    out.write_all(b"\x1b[?47l")?;  // Disable alt-buffer
+    Ok(())
 }
 
 fn hide_cursor(mut out: impl Write) -> std::io::Result<()> {
@@ -54,30 +66,42 @@ fn show_cursor(mut out: impl Write) -> std::io::Result<()> {
     Ok(())
 }
 
-/// A wrapper around a `Write` that hides the cursor on creation and shows it again on drop
-pub struct HideCursor<W: Write>(W);
-impl<W: Write> HideCursor<W> {
-    pub fn new(mut writer: W) -> Self {
+/// A wrapper around a `Write` that hides the cursor and enters the alternative screen on creation and reverts it again on drop
+pub struct OutputWrapper<W: Write>(W, bool);
+impl<W: Write> OutputWrapper<W> {
+    pub fn new(mut writer: W, use_alternative_screen: bool) -> Self {
         let _ = hide_cursor(&mut writer);
-        Self(writer)
+        if use_alternative_screen {
+            let _ = enter_alternative_screen(&mut writer);
+        }
+        Self(writer, use_alternative_screen)
     }
     pub fn show(&mut self) -> std::io::Result<()> {
         show_cursor(&mut self.0)
     }
-}
-impl<W: Write> Drop for HideCursor<W> {
-    fn drop(&mut self) {
-        let _ = self.show();
+    pub fn exit(&mut self) -> std::io::Result<()> {
+        if self.1 {
+            self.1 = false;
+            exit_alternative_screen(&mut self.0)
+        } else {
+            Ok(())
+        }
     }
 }
-impl<W: Write> Deref for HideCursor<W> {
+impl<W: Write> Drop for OutputWrapper<W> {
+    fn drop(&mut self) {
+        let _ = self.show();
+        let _ = self.exit();
+    }
+}
+impl<W: Write> Deref for OutputWrapper<W> {
     type Target = W;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl<W: Write> DerefMut for HideCursor<W> {
+impl<W: Write> DerefMut for OutputWrapper<W> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
@@ -106,7 +130,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (termwidth as usize * termheight as usize) * 18, // have room for slightly above the worst case where we need an escape sequence for each pixel on the screen
         stdout().lock(),
     );
-    let mut out = HideCursor::new(out);
+    let mut out = OutputWrapper::new(out, !args.noswitch);
 
     gst::init()?;
 
@@ -149,7 +173,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // rgb + not background
         (_, false, false) => do_run::<DefaultRenderer<Rgb>>(wait, &producer, o)?,
     }
-
+    
+    out.exit()
+        .expect("Can't exit alternative screen");  // Otherwise the dropped frames counter is lost when exiting
     print_dropped_frames(&producer.counter(), &mut *out);
     Ok(())
 }
