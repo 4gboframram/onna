@@ -53,9 +53,10 @@ impl ResizeWatcher for PollWatcher {
         let (termwidth, termheight) = (termsize.cols, termsize.rows);
 
         let changed = (termwidth != self.width) || (termheight != self.height);
-
-        self.width = termwidth;
-        self.height = termheight;
+        if changed {
+            self.width = termwidth;
+            self.height = termheight;
+        }
 
         changed
     }

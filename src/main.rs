@@ -168,7 +168,8 @@ where
     ctrlc::set_handler(move || i.store(true, std::sync::atomic::Ordering::Relaxed))
         .expect("failed to set interrupt handler");
 
-    let mut resize_watcher = resize_watcher::default_watcher()?;
+    let mut resize_watcher = resize_watcher::default_watcher()
+        .expect("failed to listen for terminal resizes");
 
     while let Ok(msg) = wait.recv_timeout(Duration::from_secs(3)) {
         if interrupt.load(std::sync::atomic::Ordering::Relaxed) {

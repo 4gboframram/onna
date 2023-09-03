@@ -96,6 +96,8 @@ impl GstProducer {
         let notify = self.notify.clone();
         let frame_data = self.frame_data.clone();
         let counter = self.counter.clone();
+
+        let mut initialized = false;
         let (mut current_width, mut current_height) = (0, 0);
 
         self.sink.set_callbacks(
@@ -123,7 +125,7 @@ impl GstProducer {
                             s.get::<i32>("height").map_err(|_| gst::FlowError::Error)? as u32;
 
                         // If resolution is changed, then the renderer must be re-initialised
-                        if width != current_width || height != current_height {
+                        if !initialized || width != current_width || height != current_height {
 
                             notify
                                 .send(ProducerMessage::Initialize { width, height })
@@ -131,6 +133,7 @@ impl GstProducer {
                             // stop locking every frame after we properly initialize our renderer
                             current_width = width;
                             current_height = height;
+                            initialized = true;
                         }
                     }
                     match notify.try_send(ProducerMessage::FrameReady) {
