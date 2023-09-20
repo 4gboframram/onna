@@ -45,6 +45,7 @@ impl Display for FrameCounter {
 #[derive(Debug)]
 pub struct GstProducer {
     sink: AppSink,
+    caps_filter: gst::Element,
     notify: SyncSender<ProducerMessage>,
     recv: Option<Receiver<ProducerMessage>>,
     frame_data: Arc<Mutex<Vec<u8>>>,
@@ -69,6 +70,8 @@ impl GstProducer {
         let app_sink = bin.by_name("app_sink").unwrap();
         let app_sink = app_sink.downcast::<AppSink>().unwrap();
 
+        let caps_filter = bin.by_name("caps").unwrap();
+
         let (notify, recv) = sync_channel(1);
         source.set_state(gst::State::Playing)?;
         source
@@ -76,6 +79,7 @@ impl GstProducer {
             .0?;
         let mut this = Self {
             notify,
+            caps_filter,
             recv: Some(recv),
             sink: app_sink,
             frame_data: Arc::new(Mutex::new(vec![])),
@@ -92,7 +96,10 @@ impl GstProducer {
         let notify = self.notify.clone();
         let frame_data = self.frame_data.clone();
         let counter = self.counter.clone();
-        let mut sent_init = false;
+
+        let mut initialized = false;
+        let (mut current_width, mut current_height) = (0, 0);
+
         self.sink.set_callbacks(
             gst_app::AppSinkCallbacks::builder()
                 .new_sample(move |sink| {
@@ -100,28 +107,33 @@ impl GstProducer {
                     let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
                     {
-                        let mut data = frame_data.lock().map_err(|_| gst::FlowError::Error)?;
-                        if data.is_empty() {
-                            *data = map.to_vec();
-                        } else {
-                            data.copy_from_slice(&map);
-                        }
-                    }
+                        // Get the resolution of this frame using it's accompanying caps
+                        let caps = sample.caps().ok_or(gst::FlowError::Error)?;
+                        let s = caps.structure(0).ok_or(gst::FlowError::Error)?;
+                        let width =
+                            s.get::<i32>("width").map_err(|_| gst::FlowError::Error)? as u32;
+                        let height =
+                            s.get::<i32>("height").map_err(|_| gst::FlowError::Error)? as u32;
 
-                    {
-                        if !sent_init {
-                            let pad = sink.static_pad("sink").ok_or(gst::FlowError::Error)?;
+                        // If resolution is changed, then the renderer must be re-initialised
+                        if !initialized || width != current_width || height != current_height {
 
-                            let caps = pad.current_caps().ok_or(gst::FlowError::Error)?;
-                            let s = caps.structure(0).ok_or(gst::FlowError::Error)?;
-                            let width =
-                                s.get::<i32>("width").map_err(|_| gst::FlowError::Error)? as u32;
-                            let height =
-                                s.get::<i32>("height").map_err(|_| gst::FlowError::Error)? as u32;
                             notify
                                 .send(ProducerMessage::Initialize { width, height })
                                 .map_err(|_| gst::FlowError::Error)?;
-                            sent_init = true; // stop locking every frame after we properly initialize our renderer
+                            // stop locking every frame after we properly initialize our renderer
+                            current_width = width;
+                            current_height = height;
+                            initialized = true;
+                        }
+                    }
+                    // If there was a resize, then data must be sent after the re-initialisation so we know that the main thread is using the correct size
+                    {
+                        let mut data = frame_data.lock().map_err(|_| gst::FlowError::Error)?;
+                        if data.len() == map.len() {
+                            data.copy_from_slice(&map);
+                        } else {
+                            *data = map.to_vec();
                         }
                     }
                     match notify.try_send(ProducerMessage::FrameReady) {
@@ -144,6 +156,19 @@ impl GstProducer {
     }
     pub fn counter(&self) -> Arc<FrameCounter> {
         self.counter.clone()
+    }
+    pub fn resize(&self, width: u32, height: u32) {
+        let mut caps = self.caps_filter.property("caps").unwrap()
+            .get::<gst::Caps>().unwrap();
+        let new_caps = caps.make_mut();
+
+        let structure = new_caps.structure_mut(0).unwrap();
+
+        structure.set("width", width as i32);
+        structure.set("height", height as i32);
+
+        self.caps_filter.set_property("caps", new_caps.to_owned())
+            .expect("failed to update resolution");
     }
 }
 
