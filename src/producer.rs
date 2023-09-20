@@ -72,7 +72,7 @@ impl GstProducer {
 
         let caps_filter = bin.by_name("caps").unwrap();
 
-        let (notify, recv) = sync_channel(2);
+        let (notify, recv) = sync_channel(1);
         source.set_state(gst::State::Playing)?;
         source
             .state(gst::ClockTime::from_seconds(timeout.as_secs()))
@@ -107,15 +107,6 @@ impl GstProducer {
                     let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
                     {
-                        let mut data = frame_data.lock().map_err(|_| gst::FlowError::Error)?;
-                        if data.len() == map.len() {
-                            data.copy_from_slice(&map);
-                        } else {
-                            *data = map.to_vec();
-                        }
-                    }
-
-                    {
                         // Get the resolution of this frame using it's accompanying caps
                         let caps = sample.caps().ok_or(gst::FlowError::Error)?;
                         let s = caps.structure(0).ok_or(gst::FlowError::Error)?;
@@ -134,6 +125,15 @@ impl GstProducer {
                             current_width = width;
                             current_height = height;
                             initialized = true;
+                        }
+                    }
+                    // If there was a resize, then data must be sent after the re-initialisation so we know that the main thread is using the correct size
+                    {
+                        let mut data = frame_data.lock().map_err(|_| gst::FlowError::Error)?;
+                        if data.len() == map.len() {
+                            data.copy_from_slice(&map);
+                        } else {
+                            *data = map.to_vec();
                         }
                     }
                     match notify.try_send(ProducerMessage::FrameReady) {
